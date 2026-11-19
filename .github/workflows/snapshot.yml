@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   validate-ref:
+    if: github.repository == 'komari-monitor/komari-agent'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -45,6 +46,7 @@ jobs:
           fi
 
   prepare:
+    if: github.repository == 'komari-monitor/komari-agent'
     needs: validate-ref
     runs-on: ubuntu-latest
     outputs:
@@ -58,6 +60,7 @@ jobs:
           echo "Snapshot version: ${VERSION}"
 
   build-and-attach-binaries:
+    if: github.repository == 'komari-monitor/komari-agent'
     needs: prepare
     runs-on: ubuntu-latest
 
@@ -106,6 +109,7 @@ jobs:
           path: komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}*
 
   publish-snapshot-release:
+    if: github.repository == 'komari-monitor/komari-agent'
     needs: [prepare, build-and-attach-binaries]
     runs-on: ubuntu-latest
     permissions:
@@ -170,6 +174,7 @@ jobs:
         shell: bash
 
   build-and-push-docker:
+    if: github.repository == 'komari-monitor/komari-agent'
     needs: [prepare, publish-snapshot-release]
     runs-on: ubuntu-latest
     permissions:

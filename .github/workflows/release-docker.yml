@@ -15,7 +15,8 @@ env:
 
 jobs:
   build-and-push-multi-arch:
-    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    if: >-
+      ${{ github.repository == 'komari-monitor/komari-agent' && (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
