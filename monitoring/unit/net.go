@@ -217,6 +217,9 @@ type VnstatOutput struct {
 }
 
 func NetworkSpeed() (totalUp, totalDown, upSpeed, downSpeed uint64, err error) {
+	if flags.TrafficConfig != "" {
+		return trafficNetworkSpeed()
+	}
 	includeNics := parseNics(flags.IncludeNics)
 	excludeNics := parseNics(flags.ExcludeNics)
 
@@ -339,6 +342,13 @@ func parseNics(nics string) map[string]struct{} {
 }
 
 func shouldInclude(nicName string, includeNics, excludeNics map[string]struct{}) bool {
+	if flags.TrafficConfig != "" {
+		if _, excluded := excludeNics[nicName]; excluded {
+			return false
+		}
+		_, included := includeNics[nicName]
+		return included
+	}
 	// 默认排除回环接口
 	for loopbackName := range loopbackNames {
 		if strings.HasPrefix(nicName, loopbackName) {

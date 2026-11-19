@@ -11,7 +11,7 @@ var startupConfig struct {
 }
 
 // CaptureStartupConfig runs after all configuration sources and discovery have
-// been applied. No fields, credentials, false values or empty values are omitted.
+// been applied. Keep the local traffic policy path out of the panel response.
 func CaptureStartupConfig(extra map[string]interface{}) error {
 	raw, err := json.Marshal(GlobalConfig)
 	if err != nil {
@@ -21,6 +21,7 @@ func CaptureStartupConfig(extra map[string]interface{}) error {
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return err
 	}
+	delete(values, "traffic_config")
 	for key, value := range extra {
 		values[key] = value
 	}

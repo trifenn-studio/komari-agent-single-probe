@@ -13,7 +13,25 @@ import (
 	"time"
 
 	"github.com/blang/semver"
+	flags_pkg "github.com/komari-monitor/komari-agent/cmd/flags"
 )
+
+func TestTrafficPolicyProtectsBothUpdatePaths(t *testing.T) {
+	flags := flags_pkg.GlobalConfig
+	previous := flags.TrafficConfig
+	t.Cleanup(func() { flags.TrafficConfig = previous })
+	flags.TrafficConfig = "policy.json"
+	if err := CheckAndUpdate(); !errors.Is(err, errTrafficConfigUpdate) {
+		t.Fatalf("scheduled update returned %v", err)
+	}
+	if err := CheckAndUpdateForVersionLine("latest"); !errors.Is(err, errTrafficConfigUpdate) {
+		t.Fatalf("requested version switch returned %v", err)
+	}
+	flags.TrafficConfig = ""
+	if err := CheckAndUpdateForVersionLine("invalid"); err == nil || !strings.Contains(err.Error(), "invalid update target") {
+		t.Fatalf("unconfigured version switch did not validate the target: %v", err)
+	}
+}
 
 // TestParseVersion 验证 parseVersion 能够解析各种版本号格式，包括带 v/V 前缀、预发布和构建元数据
 func TestParseVersion(t *testing.T) {

@@ -1,10 +1,17 @@
 package monitoring
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/komari-monitor/komari-agent/monitoring/netstatic"
+	"github.com/komari-monitor/komari-agent/utils"
 )
 
 func TestConnectionsCount(t *testing.T) {
@@ -229,10 +236,10 @@ func TestNetworkSpeedFallback(t *testing.T) {
 }
 
 func TestNetworkSpeedWithoutMonthRotate(t *testing.T) {
-
-	flags.MonthRotate = 1
-
-	// 设置测试值
+	previous := *flags
+	t.Cleanup(func() { *flags = previous })
+	flags.TrafficConfig = ""
+	flags.MonthRotate = 0
 	flags.IncludeNics = ""
 	flags.ExcludeNics = ""
 
@@ -246,32 +253,40 @@ func TestNetworkSpeedWithoutMonthRotate(t *testing.T) {
 }
 
 func TestNetworkSpeedWithMonthRotate(t *testing.T) {
-	// 保存原始值
-	originalMonthRotate := flags.MonthRotate
-	originalIncludeNics := flags.IncludeNics
-	originalExcludeNics := flags.ExcludeNics
-
-	// 恢复原始值
-	defer func() {
-		flags.MonthRotate = originalMonthRotate
-		flags.IncludeNics = originalIncludeNics
-		flags.ExcludeNics = originalExcludeNics
-	}()
-
-	// 设置测试值 - 启用月重置
-	flags.MonthRotate = 1
-	flags.IncludeNics = ""
+	previous := *flags
+	savePath := netstatic.SaveFilePath
+	netstatic.SaveFilePath = filepath.Join(t.TempDir(), "net_static.json")
+	t.Cleanup(func() {
+		if err := netstatic.Stop(); err != nil {
+			t.Error(err)
+		}
+		netstatic.SaveFilePath = savePath
+		*flags = previous
+	})
+	flags.TrafficConfig = ""
+	now := time.Now()
+	flags.MonthRotate = now.Day()
+	flags.IncludeNics = "komari-month-*"
 	flags.ExcludeNics = ""
 
-	totalUp, totalDown, upSpeed, downSpeed, err := NetworkSpeed()
-
-	// 如果vnstat不可用，可能会回退到原来的方法，这是正常的
+	reset := uint64(utils.GetLastResetDate(flags.MonthRotate, now).Unix())
+	data, err := json.Marshal(netstatic.NetStatic{Interfaces: map[string][]netstatic.TrafficData{
+		"komari-month-fixture": {{Timestamp: reset - 1, Tx: 50, Rx: 60}, {Timestamp: reset, Tx: 20, Rx: 30}},
+		"unselected-fixture":   {{Timestamp: reset, Tx: 50, Rx: 60}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(netstatic.SaveFilePath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	totalUp, totalDown, _, _, err := NetworkSpeed()
 	if err != nil {
 		t.Fatalf("NetworkSpeed failed: %v", err)
 	}
-
-	t.Logf("With MonthRotate - TotalUp: %d, TotalDown: %d, UpSpeed: %d/s, DownSpeed: %d/s",
-		totalUp, totalDown, upSpeed, downSpeed)
+	if totalUp != 20 || totalDown != 30 {
+		t.Fatalf("legacy month window = %d out, %d in, want 20 out, 30 in", totalUp, totalDown)
+	}
 }
 
 func TestNetworkSpeedWithNicFilters(t *testing.T) {
@@ -299,4 +314,21 @@ func TestNetworkSpeedWithNicFilters(t *testing.T) {
 
 	t.Logf("With excludeNics - TotalUp: %d, TotalDown: %d, UpSpeed: %d/s, DownSpeed: %d/s",
 		totalUp, totalDown, upSpeed, downSpeed)
+}
+
+func TestTrafficSelectionOptInAndLegacyCompatibility(t *testing.T) {
+	previous := flags.TrafficConfig
+	defer func() { flags.TrafficConfig = previous }()
+	include, exclude := parseNics("eth0,tun0"), parseNics("eth0")
+	flags.TrafficConfig = ""
+	if !shouldInclude("eth0", include, exclude) {
+		t.Fatal("unconfigured legacy precedence changed")
+	}
+	flags.TrafficConfig = "policy.json"
+	if shouldInclude("eth0", include, exclude) || !shouldInclude("tun0", include, exclude) || shouldInclude("eth1", include, exclude) {
+		t.Fatal("strict exact selection/exclusion failed")
+	}
+	if shouldInclude("eth0", parseNics("eth*"), nil) {
+		t.Fatal("strict wildcard expanded")
+	}
 }

@@ -21,10 +21,13 @@ import (
 
 	"github.com/blang/semver"
 	goupdate "github.com/inconshreveable/go-update"
+	flags_pkg "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
 )
 
 var ErrRestartRequired = errors.New("update installed; restart required")
+
+var errTrafficConfigUpdate = errors.New("binary self-update is disabled while traffic-config is enabled")
 
 var (
 	CurrentVersion string = "0.0.1"
@@ -680,6 +683,9 @@ func runUpdateCheck(deps updateDeps) error {
 // CheckAndUpdate checks for a newer patch release within the current major.minor line.
 // Snapshot builds track the newest Snapshot-* release instead.
 func CheckAndUpdate() error {
+	if flags_pkg.GlobalConfig.TrafficConfig != "" {
+		return errTrafficConfigUpdate
+	}
 	updateCheckMu.Lock()
 	defer updateCheckMu.Unlock()
 	return runUpdateCheck(defaultDeps())
@@ -688,6 +694,9 @@ func CheckAndUpdate() error {
 // CheckAndUpdateForVersionLine updates to "latest", a wildcard version line,
 // an exact SemVer, "snapshot", or an exact Snapshot-* tag.
 func CheckAndUpdateForVersionLine(target string) error {
+	if flags_pkg.GlobalConfig.TrafficConfig != "" {
+		return errTrafficConfigUpdate
+	}
 	parsed, err := parseUpdateTarget(target)
 	if err != nil {
 		return err

@@ -68,3 +68,5 @@ export AGENT_TOKEN="your-token"
 ```
 
 详见 `cmd/flags/flags.go` 及 `cmd/root.go`
+
+Linux 上可通过 `--traffic-config` 启用逐网卡、分方向的增量计量。参见[流量策略与本地账本](docs/traffic.md)。

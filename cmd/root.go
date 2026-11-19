@@ -52,20 +52,32 @@ var RootCmd = &cobra.Command{
 		if flags.PreferIPVersion != "" && flags.PreferIPVersion != "4" && flags.PreferIPVersion != "6" {
 			return fmt.Errorf("invalid --prefer-ip-version value %q: expected 4 or 6", flags.PreferIPVersion)
 		}
+		stopAccounting := netstatic.Stop
+		if flags.TrafficConfig != "" {
+			if err := monitoring.StartTraffic(); err != nil {
+				return fmt.Errorf("traffic startup: %w", err)
+			}
+			defer func() {
+				if err := monitoring.StopTraffic(); err != nil {
+					log.Printf("Failed to stop traffic accounting: %v", err)
+				}
+			}()
+			stopAccounting = monitoring.StopTraffic
+		}
 		// 捕获中止信号，优雅退出
 		stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
 		stopWarning := startSecurityWarning(stopCtx)
 		defer stopWarning()
-		shutdown := newShutdownCoordinator(stopWarning, netstatic.Stop, os.Exit)
+		shutdown := newShutdownCoordinator(stopWarning, stopAccounting, os.Exit)
 		go func() {
 			<-stopCtx.Done()
 			log.Printf("shutting down gracefully...")
 			shutdown.shutdown(0)
 		}()
 
-		if flags.MonthRotate != 0 {
+		if flags.MonthRotate != 0 && flags.TrafficConfig == "" {
 			err := netstatic.StartOrContinue()
 			if err != nil {
 				log.Println("Failed to start netstatic monitoring:", err)
@@ -123,7 +135,7 @@ var RootCmd = &cobra.Command{
 			http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 		}
 		// 自动更新：后台立即检查一次并按周期复查，避免启动被 GitHub 访问阻塞
-		if !flags.DisableAutoUpdate {
+		if !flags.DisableAutoUpdate && flags.TrafficConfig == "" {
 			go update.DoUpdateWorks(func() {
 				shutdown.shutdown(42)
 			})
@@ -175,6 +187,7 @@ func init() {
 	RootCmd.PersistentFlags().IntVar(&flags.InfoReportInterval, "info-report-interval", 5, "Interval in minutes for reporting basic info")
 	RootCmd.PersistentFlags().StringVar(&flags.IncludeNics, "include-nics", "", "Comma-separated list of network interfaces to include")
 	RootCmd.PersistentFlags().StringVar(&flags.ExcludeNics, "exclude-nics", "", "Comma-separated list of network interfaces to exclude")
+	RootCmd.PersistentFlags().StringVar(&flags.TrafficConfig, "traffic-config", "", "Path to an optional Linux traffic policy JSON file (requires exact include-nics)")
 	RootCmd.PersistentFlags().StringVar(&flags.IncludeMountpoints, "include-mountpoint", "", "Semicolon-separated list of mount points to include for disk statistics")
 	RootCmd.PersistentFlags().IntVar(&flags.MonthRotate, "month-rotate", 0, "Month reset for network statistics (0 to disable)")
 	RootCmd.PersistentFlags().BoolVar(&flags.MemoryIncludeCache, "memory-include-cache", false, "Include cache/buffer in memory usage")

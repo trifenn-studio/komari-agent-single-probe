@@ -50,8 +50,10 @@ type NetStaticConfig struct {
 
 type TrafficData struct {
 	Timestamp uint64 `json:"timestamp"`
-	Tx        uint64 `json:"tx"` // 第n与n-1次采集的差值
-	Rx        uint64 `json:"rx"` // 第n与n-1次采集的差值
+	Tx        uint64 `json:"tx"`                   // 第n与n-1次采集的差值
+	Rx        uint64 `json:"rx"`                   // 第n与n-1次采集的差值
+	BillingTx uint64 `json:"billing_tx,omitempty"` // opt-in: weighted delta, never a rescaled cumulative
+	BillingRx uint64 `json:"billing_rx,omitempty"`
 }
 
 var (
@@ -420,39 +422,35 @@ func GetTotalTrafficBetween(start, end uint64) (map[string]TrafficData, error) {
 	mu.RLock()
 	defer mu.RUnlock()
 	ensureInitLocked()
+	return totalTrafficBetween(store.Interfaces, staticCache, start, end), nil
+}
+
+// totalTrafficBetween 供原生采集和可选流量计量共用。
+// 仍按采样结束时间记录，并包含查询区间的两端。
+func totalTrafficBetween(records, cache map[string][]TrafficData, start, end uint64) map[string]TrafficData {
 	res := map[string]TrafficData{}
-	inRange := func(ts uint64) bool { return (start == 0 || ts >= start) && (end == 0 || ts <= end) }
-	add := func(name string, tx, rx uint64) {
-		cur := res[name]
-		cur.Tx += tx
-		cur.Rx += rx
-		res[name] = cur
-	}
-	for name, arr := range store.Interfaces {
-		var tx, rx uint64
-		for _, td := range arr {
-			if inRange(td.Timestamp) {
-				tx += td.Tx
-				rx += td.Rx
+	for _, source := range []map[string][]TrafficData{records, cache} {
+		for name, arr := range source {
+			var sum TrafficData
+			for _, td := range arr {
+				if (start == 0 || td.Timestamp >= start) && (end == 0 || td.Timestamp <= end) {
+					sum.Tx += td.Tx
+					sum.Rx += td.Rx
+					sum.BillingTx += td.BillingTx
+					sum.BillingRx += td.BillingRx
+				}
+			}
+			if sum.Tx > 0 || sum.Rx > 0 || sum.BillingTx > 0 || sum.BillingRx > 0 {
+				v := res[name]
+				v.Tx += sum.Tx
+				v.Rx += sum.Rx
+				v.BillingTx += sum.BillingTx
+				v.BillingRx += sum.BillingRx
+				res[name] = v
 			}
 		}
-		if tx > 0 || rx > 0 {
-			add(name, tx, rx)
-		}
 	}
-	for name, arr := range staticCache {
-		var tx, rx uint64
-		for _, td := range arr {
-			if inRange(td.Timestamp) {
-				tx += td.Tx
-				rx += td.Rx
-			}
-		}
-		if tx > 0 || rx > 0 {
-			add(name, tx, rx)
-		}
-	}
-	return res, nil
+	return res
 }
 
 // SetNewConfig 设置新的配置，config中的值如果为0则表示不修改对应的配置项
