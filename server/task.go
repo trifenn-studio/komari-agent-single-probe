@@ -247,58 +247,33 @@ func httpPing(target string, timeout time.Duration) (int64, error) {
 	return latency, errors.New("http status not ok")
 }
 
+// measurePing preserves each protocol's native measurement and timeout semantics.
+func measurePing(pingType, target string, timeout time.Duration) (int64, error) {
+	switch pingType {
+	case "icmp":
+		return icmpPing(target, timeout)
+	case "tcp":
+		return tcpPing(target, timeout)
+	case "http":
+		return httpPing(target, timeout)
+	default:
+		return -1, errors.New("unsupported ping type")
+	}
+}
+
 func NewPingTask(conn *ws.SafeConn, taskID uint, pingType, pingTarget string) {
+	newPingTask(conn, taskID, pingType, pingTarget, measurePing)
+}
+
+// Pass the measurement function per invocation so tests need neither public
+// targets nor shared mutable hooks. Each accepted task measures and reports once.
+func newPingTask(conn *ws.SafeConn, taskID uint, pingType, pingTarget string, measure func(string, string, time.Duration) (int64, error)) {
 	if taskID == 0 {
 		log.Printf("Invalid task ID: %d", taskID)
 		return
 	}
-	var err error = nil
-	var latency int64
+	latency, err := measure(pingType, pingTarget, 3*time.Second)
 	pingResult := -1
-	timeout := 3 * time.Second           // 默认超时时间
-	const highLatencyThreshold = 1000    // ms 阈值
-	const retryDropThresholdTcping = 800 // ms 重试中延迟降低超过此值则基本认为发生重传
-	// 800ms = SYN/SYN-ACK 首次超时重传 1000ms - 防误判容许 200ms 延迟抖动
-
-	measure := func() (int64, error) {
-		switch pingType {
-		case "icmp":
-			return icmpPing(pingTarget, timeout)
-		case "tcp":
-			return tcpPing(pingTarget, timeout)
-		case "http":
-			return httpPing(pingTarget, timeout)
-		default:
-			return -1, errors.New("unsupported ping type")
-		}
-	}
-	PingHighLatencyRetries := 3
-	// 首次测量
-	if latency, err = measure(); err == nil {
-		firstLatency := latency
-		if latency > int64(highLatencyThreshold) && PingHighLatencyRetries > 0 {
-			attempts := PingHighLatencyRetries
-			for i := 0; i < attempts; i++ {
-				if second, err2 := measure(); err2 == nil {
-					if second <= int64(highLatencyThreshold) {
-						if pingType == "tcp" && firstLatency-second > int64(retryDropThresholdTcping) {
-							err = errors.New("suspicious retransmission detected in tcp handshake")
-							break
-						}
-						latency = second
-						break
-					}
-					if i == attempts-1 { // 最后一次仍高
-						err = errors.New("latency remains high after retries")
-					}
-				} else {
-					err = err2
-					break
-				}
-			}
-		}
-	}
-
 	if err != nil {
 		log.Printf("Ping task %d failed: %v", taskID, err)
 		pingResult = -1 // 如果有错误，设置结果为 -1
@@ -307,11 +282,8 @@ func NewPingTask(conn *ws.SafeConn, taskID uint, pingType, pingTarget string) {
 	}
 	finishedAt := time.Now()
 	wsPayload := v2.BuildPingResultPayload(taskID, pingType, pingResult, finishedAt)
-	// https://github.com/komari-monitor/komari/commit/eb87a4fc330b7d1c407fa4ff70177615a4f50a1f
-	// -1 代表丢包，服务端计算
-	//if pingResult == -1 {
-	//	return
-	//}
+	// The native -1 represents a failed probe, including timeout, DNS and
+	// execution errors; it does not by itself establish physical packet loss.
 	if conn == nil {
 		if err := postV2RPC(wsPayload); err != nil {
 			log.Printf("Failed to upload ping result over POST: %v", err)
